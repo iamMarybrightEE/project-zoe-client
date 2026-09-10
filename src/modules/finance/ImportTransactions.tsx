@@ -59,7 +59,7 @@ const ImportTransactions = () => {
 
   // Step 3: Parsed data
   const [parsedTransactions, setParsedTransactions] = useState<ParsedTransaction[]>([]);
-  const [importResult, setImportResult] = useState<{ imported: number; errors: number } | null>(null);
+  const [importResult, setImportResult] = useState<{ imported: number; errors: string[] } | null>(null);
 
   useEffect(() => {
     get(
@@ -80,19 +80,17 @@ const ImportTransactions = () => {
   }, []);
 
   const handleFileSelect = (selectedFile: File) => {
-    const validTypes = [
-      'text/csv',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'application/vnd.ms-excel',
-    ];
-    const validExtensions = ['.csv', '.xlsx', '.xls'];
+    // Validated by extension rather than MIME type: browsers report CSV
+    // inconsistently (text/csv, application/vnd.ms-excel, or empty depending
+    // on the OS), and the server picks its reader by extension too.
+    const validExtensions = ['.csv', '.xlsx'];
 
-    const hasValidExtension = validExtensions.some(ext =>
-      selectedFile.name.toLowerCase().endsWith(ext)
+    const hasValidExtension = validExtensions.some((ext) =>
+      selectedFile.name.toLowerCase().endsWith(ext),
     );
 
-    if (!validTypes.includes(selectedFile.type) && !hasValidExtension) {
-      setParseError('Please upload a CSV or Excel file');
+    if (!hasValidExtension) {
+      setParseError('Please upload a .csv or .xlsx file');
       return;
     }
 
@@ -176,7 +174,7 @@ const ImportTransactions = () => {
         accountId: config.accountId,
         transactions: validTransactions,
       },
-      (result: { imported: number; errors: number }) => {
+      (result: { imported: number; errors: string[] }) => {
         setImportResult(result);
         toast.success(`Imported ${result.imported} transactions`);
         setImporting(false);
@@ -314,7 +312,7 @@ const ImportTransactions = () => {
               type="file"
               ref={fileInputRef}
               onChange={handleFileInputChange}
-              accept=".csv,.xlsx,.xls"
+              accept=".csv,.xlsx"
               style={{ display: 'none' }}
             />
 
@@ -343,7 +341,7 @@ const ImportTransactions = () => {
               <Typography variant="body1" mb={1}>
                 {isDragging
                   ? 'Drop the file here...'
-                  : 'Drag and drop a CSV or Excel file here'}
+                  : 'Drag and drop a .csv or .xlsx file here'}
               </Typography>
               <Typography variant="body2" color="text.secondary">
                 or click to select a file
@@ -394,7 +392,8 @@ const ImportTransactions = () => {
                 </Typography>
                 <Typography color="text.secondary" mb={3}>
                   {importResult.imported} transactions imported
-                  {importResult.errors > 0 && `, ${importResult.errors} errors`}
+                  {importResult.errors.length > 0 &&
+                    `, ${importResult.errors.length} failed`}
                 </Typography>
                 <Button variant="contained" onClick={handleReset}>
                   Import More
@@ -428,6 +427,7 @@ const ImportTransactions = () => {
                         <TableCell>Sender</TableCell>
                         <TableCell align="right">Amount</TableCell>
                         <TableCell>Category</TableCell>
+                        <TableCell>Why</TableCell>
                         <TableCell>Status</TableCell>
                       </TableRow>
                     </TableHead>
@@ -449,6 +449,11 @@ const ImportTransactions = () => {
                           </TableCell>
                           <TableCell>
                             <Chip label={tx.category} size="small" />
+                          </TableCell>
+                          <TableCell>
+                            <Typography variant="caption" color="text.secondary">
+                              {tx.matchedRule || '-'}
+                            </Typography>
                           </TableCell>
                           <TableCell>
                             {tx.isValid ? (

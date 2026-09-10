@@ -35,7 +35,7 @@ import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import type { Dayjs } from 'dayjs';
 import { toast } from 'react-toastify';
-import { get, post, put } from '../../utils/ajax';
+import { get, post } from '../../utils/ajax';
 import { remoteRoutes } from '../../data/constants';
 import type { DistributionBatch, BatchStatus } from './types';
 
@@ -86,7 +86,7 @@ const Distributions = () => {
   const fetchBatches = () => {
     setLoading(true);
     get(
-      remoteRoutes.financialDistributions,
+      `${remoteRoutes.financialDistributions}/batches`,
       (data: DistributionBatch[]) => {
         setBatches(data);
         setLoading(false);
@@ -133,8 +133,8 @@ const Distributions = () => {
   };
 
   const handleSubmitForApproval = (batchId: number) => {
-    put(
-      `${remoteRoutes.financialDistributions}/${batchId}/submit`,
+    post(
+      `${remoteRoutes.financialDistributions}/batches/${batchId}/submit`,
       {},
       () => {
         toast.success('Batch submitted for approval');
@@ -147,8 +147,8 @@ const Distributions = () => {
   };
 
   const handleApprove = (batchId: number) => {
-    put(
-      `${remoteRoutes.financialDistributions}/${batchId}/approve`,
+    post(
+      `${remoteRoutes.financialDistributions}/batches/${batchId}/approve`,
       {},
       () => {
         toast.success('Batch approved');
@@ -165,8 +165,8 @@ const Distributions = () => {
       return;
     }
 
-    put(
-      `${remoteRoutes.financialDistributions}/${batchId}/execute`,
+    post(
+      `${remoteRoutes.financialDistributions}/batches/${batchId}/execute`,
       {},
       () => {
         toast.success('Distribution executed');
@@ -177,6 +177,13 @@ const Distributions = () => {
       }
     );
   };
+
+/**
+   * Postgres numeric columns arrive as strings, so formatting has to coerce
+   * first — otherwise "1500.00" renders unseparated, and a null throws.
+   */
+  const money = (value: number | string | null | undefined) =>
+    Number(value ?? 0).toLocaleString();
 
   const toggleExpand = (batchId: number) => {
     setExpandedBatch(expandedBatch === batchId ? null : batchId);
@@ -242,7 +249,7 @@ const Distributions = () => {
                   </Box>
                   <Box display="flex" alignItems="center" gap={2}>
                     <Typography variant="h6">
-                      {batch.totalAmount.toLocaleString()}
+                      {money(batch.totalAmount)}
                     </Typography>
                     <Chip
                       icon={getStatusIcon(batch.status)}
@@ -305,34 +312,65 @@ const Distributions = () => {
                           </TableRow>
                         </TableHead>
                         <TableBody>
-                          {batch.distributions.map((dist) => (
-                            <TableRow key={dist.id}>
-                              <TableCell>
-                                <Chip label={dist.category} size="small" variant="outlined" />
-                              </TableCell>
-                              <TableCell>{dist.purpose}</TableCell>
-                              <TableCell>
-                                {dist.toAccount?.name || dist.toLocation?.name || '-'}
-                              </TableCell>
-                              <TableCell align="right">
-                                {dist.percentage ? `${dist.percentage}%` : '-'}
-                              </TableCell>
-                              <TableCell align="right">
-                                {dist.amount.toLocaleString()}
-                              </TableCell>
-                              <TableCell>
-                                {dist.transferred ? (
-                                  <Chip
-                                    label="Transferred"
-                                    color="success"
-                                    size="small"
-                                  />
-                                ) : (
-                                  <Chip label="Pending" size="small" variant="outlined" />
-                                )}
+                          {(batch.distributions ?? []).length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={6}>
+                                <Typography
+                                  variant="body2"
+                                  color="text.secondary"
+                                  py={1}
+                                >
+                                  No distribution lines on this batch yet.
+                                </Typography>
                               </TableCell>
                             </TableRow>
-                          ))}
+                          ) : (
+                            (batch.distributions ?? []).map((dist) => (
+                              <TableRow key={dist.id}>
+                                <TableCell>
+                                  <Chip
+                                    label={dist.category}
+                                    size="small"
+                                    variant="outlined"
+                                  />
+                                </TableCell>
+                                <TableCell>{dist.description || '-'}</TableCell>
+                                <TableCell>
+                                  {dist.targetAccount?.name ||
+                                    dist.targetGroup?.name ||
+                                    '-'}
+                                </TableCell>
+                                <TableCell align="right">
+                                  {dist.percentage != null
+                                    ? `${Number(dist.percentage)}%`
+                                    : '-'}
+                                </TableCell>
+                                <TableCell align="right">
+                                  {money(dist.amount)}
+                                </TableCell>
+                                <TableCell>
+                                  {/*
+                                    A line is only actually paid out once its
+                                    batch has been executed — the entity has no
+                                    per-line transferred flag.
+                                  */}
+                                  {batch.status === 'EXECUTED' ? (
+                                    <Chip
+                                      label="Transferred"
+                                      color="success"
+                                      size="small"
+                                    />
+                                  ) : (
+                                    <Chip
+                                      label="Pending"
+                                      size="small"
+                                      variant="outlined"
+                                    />
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                            ))
+                          )}
                         </TableBody>
                       </Table>
                     </TableContainer>
