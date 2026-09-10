@@ -646,7 +646,9 @@ const Reconciliation = () => {
                         )}
                       </TableCell>
                       <TableCell align="right">
-                        {tx.status === 'PENDING' && !tx.reconciliationMatch && (
+                        {tx.status === 'PENDING' &&
+                          (!tx.reconciliationMatch ||
+                            tx.reconciliationMatch.status === 'REJECTED') && (
                           <Tooltip title="Match to contact">
                             <IconButton
                               size="small"
