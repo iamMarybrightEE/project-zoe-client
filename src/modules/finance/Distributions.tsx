@@ -35,9 +35,9 @@ import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import type { Dayjs } from 'dayjs';
 import { toast } from 'react-toastify';
-import { get, post, put } from '../../utils/ajax';
+import { get, post } from '../../utils/ajax';
 import { remoteRoutes } from '../../data/constants';
-import type { DistributionBatch, BatchStatus } from './types';
+import type { DistributionBatch, Distribution, BatchStatus } from './types';
 
 const getStatusColor = (status: BatchStatus): 'default' | 'warning' | 'info' | 'success' => {
   switch (status) {
@@ -73,6 +73,13 @@ const Distributions = () => {
   const [batches, setBatches] = useState<DistributionBatch[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedBatch, setExpandedBatch] = useState<number | null>(null);
+  // The list endpoint returns batches without their lines; details are
+  // fetched the first time a batch is expanded and cached here.
+  const [batchDetails, setBatchDetails] = useState<
+    Record<number, Distribution[]>
+  >({});
+  const [loadingDetail, setLoadingDetail] = useState<number | null>(null);
+  const [executingId, setExecutingId] = useState<number | null>(null);
 
   // Create dialog
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -84,9 +91,11 @@ const Distributions = () => {
   });
 
   const fetchBatches = () => {
+    // Batch contents may have changed; drop the cache so an expand refetches.
+    setBatchDetails({});
     setLoading(true);
     get(
-      remoteRoutes.financialDistributions,
+      `${remoteRoutes.financialDistributions}/batches`,
       (data: DistributionBatch[]) => {
         setBatches(data);
         setLoading(false);
@@ -133,8 +142,8 @@ const Distributions = () => {
   };
 
   const handleSubmitForApproval = (batchId: number) => {
-    put(
-      `${remoteRoutes.financialDistributions}/${batchId}/submit`,
+    post(
+      `${remoteRoutes.financialDistributions}/batches/${batchId}/submit`,
       {},
       () => {
         toast.success('Batch submitted for approval');
@@ -147,8 +156,8 @@ const Distributions = () => {
   };
 
   const handleApprove = (batchId: number) => {
-    put(
-      `${remoteRoutes.financialDistributions}/${batchId}/approve`,
+    post(
+      `${remoteRoutes.financialDistributions}/batches/${batchId}/approve`,
       {},
       () => {
         toast.success('Batch approved');
@@ -165,21 +174,52 @@ const Distributions = () => {
       return;
     }
 
-    put(
-      `${remoteRoutes.financialDistributions}/${batchId}/execute`,
+    setExecutingId(batchId);
+    post(
+      `${remoteRoutes.financialDistributions}/batches/${batchId}/execute`,
       {},
       () => {
+        setExecutingId(null);
         toast.success('Distribution executed');
         fetchBatches();
       },
       () => {
+        setExecutingId(null);
         toast.error('Failed to execute distribution');
       }
     );
   };
 
+/**
+   * Postgres numeric columns arrive as strings, so formatting has to coerce
+   * first — otherwise "1500.00" renders unseparated, and a null throws.
+   */
+  const money = (value: number | string | null | undefined) =>
+    Number(value ?? 0).toLocaleString();
+
   const toggleExpand = (batchId: number) => {
-    setExpandedBatch(expandedBatch === batchId ? null : batchId);
+    const next = expandedBatch === batchId ? null : batchId;
+    setExpandedBatch(next);
+
+    if (next === null || batchDetails[batchId]) {
+      return;
+    }
+
+    setLoadingDetail(batchId);
+    get(
+      `${remoteRoutes.financialDistributions}/batches/${batchId}`,
+      (data: DistributionBatch) => {
+        setBatchDetails((prev) => ({
+          ...prev,
+          [batchId]: data.distributions ?? [],
+        }));
+        setLoadingDetail(null);
+      },
+      () => {
+        setLoadingDetail(null);
+        toast.error('Failed to load distribution lines');
+      }
+    );
   };
 
   if (loading) {
@@ -242,7 +282,7 @@ const Distributions = () => {
                   </Box>
                   <Box display="flex" alignItems="center" gap={2}>
                     <Typography variant="h6">
-                      {batch.totalAmount.toLocaleString()}
+                      {money(batch.totalAmount)}
                     </Typography>
                     <Chip
                       icon={getStatusIcon(batch.status)}
@@ -278,12 +318,13 @@ const Distributions = () => {
                         size="small"
                         variant="contained"
                         startIcon={<PlayArrowIcon />}
+                        disabled={executingId === batch.id}
                         onClick={(e) => {
                           e.stopPropagation();
                           handleExecute(batch.id);
                         }}
                       >
-                        Execute
+                        {executingId === batch.id ? 'Executing...' : 'Execute'}
                       </Button>
                     )}
                   </Box>
@@ -305,34 +346,79 @@ const Distributions = () => {
                           </TableRow>
                         </TableHead>
                         <TableBody>
-                          {batch.distributions.map((dist) => (
-                            <TableRow key={dist.id}>
-                              <TableCell>
-                                <Chip label={dist.category} size="small" variant="outlined" />
-                              </TableCell>
-                              <TableCell>{dist.purpose}</TableCell>
-                              <TableCell>
-                                {dist.toAccount?.name || dist.toLocation?.name || '-'}
-                              </TableCell>
-                              <TableCell align="right">
-                                {dist.percentage ? `${dist.percentage}%` : '-'}
-                              </TableCell>
-                              <TableCell align="right">
-                                {dist.amount.toLocaleString()}
-                              </TableCell>
-                              <TableCell>
-                                {dist.transferred ? (
-                                  <Chip
-                                    label="Transferred"
-                                    color="success"
-                                    size="small"
-                                  />
-                                ) : (
-                                  <Chip label="Pending" size="small" variant="outlined" />
-                                )}
+                          {batchDetails[batch.id] === undefined ? (
+                            <TableRow>
+                              <TableCell colSpan={6}>
+                                <Typography
+                                  variant="body2"
+                                  color="text.secondary"
+                                  py={1}
+                                >
+                                  {loadingDetail === batch.id
+                                    ? 'Loading distribution lines…'
+                                    : 'Distribution lines not loaded.'}
+                                </Typography>
                               </TableCell>
                             </TableRow>
-                          ))}
+                          ) : batchDetails[batch.id].length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={6}>
+                                <Typography
+                                  variant="body2"
+                                  color="text.secondary"
+                                  py={1}
+                                >
+                                  No distribution lines on this batch yet.
+                                </Typography>
+                              </TableCell>
+                            </TableRow>
+                          ) : (
+                            batchDetails[batch.id].map((dist) => (
+                              <TableRow key={dist.id}>
+                                <TableCell>
+                                  <Chip
+                                    label={dist.category}
+                                    size="small"
+                                    variant="outlined"
+                                  />
+                                </TableCell>
+                                <TableCell>{dist.description || '-'}</TableCell>
+                                <TableCell>
+                                  {dist.targetAccount?.name ||
+                                    dist.targetGroup?.name ||
+                                    '-'}
+                                </TableCell>
+                                <TableCell align="right">
+                                  {dist.percentage != null
+                                    ? `${Number(dist.percentage)}%`
+                                    : '-'}
+                                </TableCell>
+                                <TableCell align="right">
+                                  {money(dist.amount)}
+                                </TableCell>
+                                <TableCell>
+                                  {/*
+                                    A line is only actually paid out once its
+                                    batch has been executed — the entity has no
+                                    per-line transferred flag.
+                                  */}
+                                  {batch.status === 'EXECUTED' ? (
+                                    <Chip
+                                      label="Transferred"
+                                      color="success"
+                                      size="small"
+                                    />
+                                  ) : (
+                                    <Chip
+                                      label="Pending"
+                                      size="small"
+                                      variant="outlined"
+                                    />
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                            ))
+                          )}
                         </TableBody>
                       </Table>
                     </TableContainer>

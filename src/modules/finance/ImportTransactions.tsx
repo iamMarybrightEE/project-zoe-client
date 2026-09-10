@@ -31,8 +31,8 @@ import {
   Error as ErrorIcon,
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
-import { get, post } from '../../utils/ajax';
-import { remoteRoutes, AUTH_TOKEN_KEY } from '../../data/constants';
+import { get, post, postFile } from '../../utils/ajax';
+import { remoteRoutes } from '../../data/constants';
 import type { FinancialAccount, ParsedTransaction, TransactionCategory, TransactionImportConfig } from './types';
 
 const steps = ['Select Account', 'Upload File', 'Review & Import'];
@@ -59,7 +59,7 @@ const ImportTransactions = () => {
 
   // Step 3: Parsed data
   const [parsedTransactions, setParsedTransactions] = useState<ParsedTransaction[]>([]);
-  const [importResult, setImportResult] = useState<{ imported: number; errors: number } | null>(null);
+  const [importResult, setImportResult] = useState<{ imported: number; errors: string[] } | null>(null);
 
   useEffect(() => {
     get(
@@ -80,19 +80,17 @@ const ImportTransactions = () => {
   }, []);
 
   const handleFileSelect = (selectedFile: File) => {
-    const validTypes = [
-      'text/csv',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'application/vnd.ms-excel',
-    ];
-    const validExtensions = ['.csv', '.xlsx', '.xls'];
+    // Validated by extension rather than MIME type: browsers report CSV
+    // inconsistently (text/csv, application/vnd.ms-excel, or empty depending
+    // on the OS), and the server picks its reader by extension too.
+    const validExtensions = ['.csv', '.xlsx'];
 
-    const hasValidExtension = validExtensions.some(ext =>
-      selectedFile.name.toLowerCase().endsWith(ext)
+    const hasValidExtension = validExtensions.some((ext) =>
+      selectedFile.name.toLowerCase().endsWith(ext),
     );
 
-    if (!validTypes.includes(selectedFile.type) && !hasValidExtension) {
-      setParseError('Please upload a CSV or Excel file');
+    if (!hasValidExtension) {
+      setParseError('Please upload a .csv or .xlsx file');
       return;
     }
 
@@ -137,28 +135,24 @@ const ImportTransactions = () => {
     formData.append('defaultCategory', config.defaultCategory);
     formData.append('applyServiceTimeRules', config.applyServiceTimeRules.toString());
 
-    const token = localStorage.getItem(AUTH_TOKEN_KEY);
-
-    fetch(`${remoteRoutes.financialTransactions}/parse`, {
-      method: 'POST',
-      body: formData,
-      headers: {
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error('Failed to parse file');
-        return res.json();
-      })
-      .then((data: ParsedTransaction[]) => {
+    // Goes through the shared client so the request picks up the auth header,
+    // the timeout and the app's session-expiry handling, rather than a bare
+    // fetch that reimplements only the token.
+    postFile(
+      `${remoteRoutes.financialTransactions}/parse`,
+      formData,
+      (data: ParsedTransaction[]) => {
         setParsedTransactions(data);
         setActiveStep(2);
         setParsing(false);
-      })
-      .catch((err) => {
-        setParseError(err.message || 'Failed to parse file');
+      },
+      (err: unknown) => {
+        setParseError(
+          err instanceof Error ? err.message : 'Failed to parse file',
+        );
         setParsing(false);
-      });
+      },
+    );
   };
 
   const handleImport = () => {
@@ -176,7 +170,7 @@ const ImportTransactions = () => {
         accountId: config.accountId,
         transactions: validTransactions,
       },
-      (result: { imported: number; errors: number }) => {
+      (result: { imported: number; errors: string[] }) => {
         setImportResult(result);
         toast.success(`Imported ${result.imported} transactions`);
         setImporting(false);
@@ -314,7 +308,7 @@ const ImportTransactions = () => {
               type="file"
               ref={fileInputRef}
               onChange={handleFileInputChange}
-              accept=".csv,.xlsx,.xls"
+              accept=".csv,.xlsx"
               style={{ display: 'none' }}
             />
 
@@ -343,7 +337,7 @@ const ImportTransactions = () => {
               <Typography variant="body1" mb={1}>
                 {isDragging
                   ? 'Drop the file here...'
-                  : 'Drag and drop a CSV or Excel file here'}
+                  : 'Drag and drop a .csv or .xlsx file here'}
               </Typography>
               <Typography variant="body2" color="text.secondary">
                 or click to select a file
@@ -394,8 +388,27 @@ const ImportTransactions = () => {
                 </Typography>
                 <Typography color="text.secondary" mb={3}>
                   {importResult.imported} transactions imported
-                  {importResult.errors > 0 && `, ${importResult.errors} errors`}
+                  {importResult.errors.length > 0 &&
+                    `, ${importResult.errors.length} failed`}
                 </Typography>
+
+                {importResult.errors.length > 0 && (
+                  <Alert severity="warning" sx={{ mb: 3, textAlign: 'left' }}>
+                    <Typography variant="subtitle2" gutterBottom>
+                      Rows that could not be imported
+                    </Typography>
+                    {/* Each message names the offending row, so showing them
+                        lets the user fix the file instead of guessing. */}
+                    <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                      {importResult.errors.map((message) => (
+                        <li key={message}>
+                          <Typography variant="body2">{message}</Typography>
+                        </li>
+                      ))}
+                    </Box>
+                  </Alert>
+                )}
+
                 <Button variant="contained" onClick={handleReset}>
                   Import More
                 </Button>
@@ -428,6 +441,7 @@ const ImportTransactions = () => {
                         <TableCell>Sender</TableCell>
                         <TableCell align="right">Amount</TableCell>
                         <TableCell>Category</TableCell>
+                        <TableCell>Why</TableCell>
                         <TableCell>Status</TableCell>
                       </TableRow>
                     </TableHead>
@@ -449,6 +463,11 @@ const ImportTransactions = () => {
                           </TableCell>
                           <TableCell>
                             <Chip label={tx.category} size="small" />
+                          </TableCell>
+                          <TableCell>
+                            <Typography variant="caption" color="text.secondary">
+                              {tx.matchedRule || '-'}
+                            </Typography>
                           </TableCell>
                           <TableCell>
                             {tx.isValid ? (
