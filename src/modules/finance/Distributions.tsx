@@ -37,7 +37,7 @@ import type { Dayjs } from 'dayjs';
 import { toast } from 'react-toastify';
 import { get, post } from '../../utils/ajax';
 import { remoteRoutes } from '../../data/constants';
-import type { DistributionBatch, BatchStatus } from './types';
+import type { DistributionBatch, Distribution, BatchStatus } from './types';
 
 const getStatusColor = (status: BatchStatus): 'default' | 'warning' | 'info' | 'success' => {
   switch (status) {
@@ -73,6 +73,13 @@ const Distributions = () => {
   const [batches, setBatches] = useState<DistributionBatch[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedBatch, setExpandedBatch] = useState<number | null>(null);
+  // The list endpoint returns batches without their lines; details are
+  // fetched the first time a batch is expanded and cached here.
+  const [batchDetails, setBatchDetails] = useState<
+    Record<number, Distribution[]>
+  >({});
+  const [loadingDetail, setLoadingDetail] = useState<number | null>(null);
+  const [executingId, setExecutingId] = useState<number | null>(null);
 
   // Create dialog
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -84,6 +91,8 @@ const Distributions = () => {
   });
 
   const fetchBatches = () => {
+    // Batch contents may have changed; drop the cache so an expand refetches.
+    setBatchDetails({});
     setLoading(true);
     get(
       `${remoteRoutes.financialDistributions}/batches`,
@@ -165,14 +174,17 @@ const Distributions = () => {
       return;
     }
 
+    setExecutingId(batchId);
     post(
       `${remoteRoutes.financialDistributions}/batches/${batchId}/execute`,
       {},
       () => {
+        setExecutingId(null);
         toast.success('Distribution executed');
         fetchBatches();
       },
       () => {
+        setExecutingId(null);
         toast.error('Failed to execute distribution');
       }
     );
@@ -186,7 +198,28 @@ const Distributions = () => {
     Number(value ?? 0).toLocaleString();
 
   const toggleExpand = (batchId: number) => {
-    setExpandedBatch(expandedBatch === batchId ? null : batchId);
+    const next = expandedBatch === batchId ? null : batchId;
+    setExpandedBatch(next);
+
+    if (next === null || batchDetails[batchId]) {
+      return;
+    }
+
+    setLoadingDetail(batchId);
+    get(
+      `${remoteRoutes.financialDistributions}/batches/${batchId}`,
+      (data: DistributionBatch) => {
+        setBatchDetails((prev) => ({
+          ...prev,
+          [batchId]: data.distributions ?? [],
+        }));
+        setLoadingDetail(null);
+      },
+      () => {
+        setLoadingDetail(null);
+        toast.error('Failed to load distribution lines');
+      }
+    );
   };
 
   if (loading) {
@@ -285,12 +318,13 @@ const Distributions = () => {
                         size="small"
                         variant="contained"
                         startIcon={<PlayArrowIcon />}
+                        disabled={executingId === batch.id}
                         onClick={(e) => {
                           e.stopPropagation();
                           handleExecute(batch.id);
                         }}
                       >
-                        Execute
+                        {executingId === batch.id ? 'Executing...' : 'Execute'}
                       </Button>
                     )}
                   </Box>
@@ -312,7 +346,21 @@ const Distributions = () => {
                           </TableRow>
                         </TableHead>
                         <TableBody>
-                          {(batch.distributions ?? []).length === 0 ? (
+                          {batchDetails[batch.id] === undefined ? (
+                            <TableRow>
+                              <TableCell colSpan={6}>
+                                <Typography
+                                  variant="body2"
+                                  color="text.secondary"
+                                  py={1}
+                                >
+                                  {loadingDetail === batch.id
+                                    ? 'Loading distribution lines…'
+                                    : 'Distribution lines not loaded.'}
+                                </Typography>
+                              </TableCell>
+                            </TableRow>
+                          ) : batchDetails[batch.id].length === 0 ? (
                             <TableRow>
                               <TableCell colSpan={6}>
                                 <Typography
@@ -325,7 +373,7 @@ const Distributions = () => {
                               </TableCell>
                             </TableRow>
                           ) : (
-                            (batch.distributions ?? []).map((dist) => (
+                            batchDetails[batch.id].map((dist) => (
                               <TableRow key={dist.id}>
                                 <TableCell>
                                   <Chip

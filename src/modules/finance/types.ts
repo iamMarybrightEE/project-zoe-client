@@ -129,8 +129,14 @@ export interface DistributionBatch {
   periodStart: string;
   periodEnd: string;
   status: BatchStatus;
-  /** Absent unless the endpoint loaded the relation — always guard it. */
+  /**
+   * Only populated by the batch-detail endpoint. The list endpoint omits it
+   * and returns `distributionCount` instead, so `undefined` here means "not
+   * loaded", never "none".
+   */
   distributions?: Distribution[];
+  /** Line count, returned by the list endpoint. */
+  distributionCount?: number;
   /** Postgres numeric arrives as a string; coerce before formatting. */
   totalAmount: number | string;
   createdBy?: {

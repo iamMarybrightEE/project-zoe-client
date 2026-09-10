@@ -31,8 +31,8 @@ import {
   Error as ErrorIcon,
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
-import { get, post } from '../../utils/ajax';
-import { remoteRoutes, AUTH_TOKEN_KEY } from '../../data/constants';
+import { get, post, postFile } from '../../utils/ajax';
+import { remoteRoutes } from '../../data/constants';
 import type { FinancialAccount, ParsedTransaction, TransactionCategory, TransactionImportConfig } from './types';
 
 const steps = ['Select Account', 'Upload File', 'Review & Import'];
@@ -135,28 +135,24 @@ const ImportTransactions = () => {
     formData.append('defaultCategory', config.defaultCategory);
     formData.append('applyServiceTimeRules', config.applyServiceTimeRules.toString());
 
-    const token = localStorage.getItem(AUTH_TOKEN_KEY);
-
-    fetch(`${remoteRoutes.financialTransactions}/parse`, {
-      method: 'POST',
-      body: formData,
-      headers: {
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error('Failed to parse file');
-        return res.json();
-      })
-      .then((data: ParsedTransaction[]) => {
+    // Goes through the shared client so the request picks up the auth header,
+    // the timeout and the app's session-expiry handling, rather than a bare
+    // fetch that reimplements only the token.
+    postFile(
+      `${remoteRoutes.financialTransactions}/parse`,
+      formData,
+      (data: ParsedTransaction[]) => {
         setParsedTransactions(data);
         setActiveStep(2);
         setParsing(false);
-      })
-      .catch((err) => {
-        setParseError(err.message || 'Failed to parse file');
+      },
+      (err: unknown) => {
+        setParseError(
+          err instanceof Error ? err.message : 'Failed to parse file',
+        );
         setParsing(false);
-      });
+      },
+    );
   };
 
   const handleImport = () => {
@@ -395,6 +391,24 @@ const ImportTransactions = () => {
                   {importResult.errors.length > 0 &&
                     `, ${importResult.errors.length} failed`}
                 </Typography>
+
+                {importResult.errors.length > 0 && (
+                  <Alert severity="warning" sx={{ mb: 3, textAlign: 'left' }}>
+                    <Typography variant="subtitle2" gutterBottom>
+                      Rows that could not be imported
+                    </Typography>
+                    {/* Each message names the offending row, so showing them
+                        lets the user fix the file instead of guessing. */}
+                    <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                      {importResult.errors.map((message) => (
+                        <li key={message}>
+                          <Typography variant="body2">{message}</Typography>
+                        </li>
+                      ))}
+                    </Box>
+                  </Alert>
+                )}
+
                 <Button variant="contained" onClick={handleReset}>
                   Import More
                 </Button>

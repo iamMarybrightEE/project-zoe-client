@@ -113,6 +113,9 @@ const Reconciliation = () => {
   const [running, setRunning] = useState(false);
   const [approving, setApproving] = useState(false);
   const [selectedMatchIds, setSelectedMatchIds] = useState<number[]>([]);
+  // Transaction whose approve/reject request is in flight, so both controls
+  // on that row can be disabled without freezing the whole table.
+  const [resolvingId, setResolvingId] = useState<number | null>(null);
 
   const fetchTransactions = () => {
     setLoading(true);
@@ -322,30 +325,36 @@ const Reconciliation = () => {
   };
 
   const handleApproveMatch = (transactionId: number) => {
+    setResolvingId(transactionId);
     put(
       `${remoteRoutes.financialReconciliation}/approve/${transactionId}`,
       {},
       () => {
         toast.success('Match approved');
+        setResolvingId(null);
         dropFromSelection(transactionId);
         fetchTransactions();
       },
       () => {
+        setResolvingId(null);
         toast.error('Failed to approve match');
       }
     );
   };
 
   const handleRejectMatch = (transactionId: number) => {
+    setResolvingId(transactionId);
     put(
       `${remoteRoutes.financialReconciliation}/reject/${transactionId}`,
       {},
       () => {
         toast.success('Match rejected');
+        setResolvingId(null);
         dropFromSelection(transactionId);
         fetchTransactions();
       },
       () => {
+        setResolvingId(null);
         toast.error('Failed to reject match');
       }
     );
@@ -570,6 +579,13 @@ const Reconciliation = () => {
                             onChange={() =>
                               toggleMatchSelection(tx.reconciliationMatch!.id)
                             }
+                            slotProps={{
+                              input: {
+                                'aria-label': `Select match for ${
+                                  tx.senderName || 'transaction'
+                                } ${tx.amount}`,
+                              },
+                            }}
                           />
                         )}
                       </TableCell>
@@ -653,6 +669,7 @@ const Reconciliation = () => {
                                 <IconButton
                                   size="small"
                                   color="success"
+                                  disabled={resolvingId === tx.id}
                                   onClick={() => handleApproveMatch(tx.id)}
                                 >
                                   <CheckCircleIcon />
@@ -662,6 +679,7 @@ const Reconciliation = () => {
                                 <IconButton
                                   size="small"
                                   color="error"
+                                  disabled={resolvingId === tx.id}
                                   onClick={() => handleRejectMatch(tx.id)}
                                 >
                                   <WarningIcon />
